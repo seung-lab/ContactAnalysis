@@ -6,4 +6,4 @@
 
 [![codecov.io](http://codecov.io/github/macrintr/ContactAnalysis.jl/coverage.svg?branch=master)](http://codecov.io/github/macrintr/ContactAnalysis.jl?branch=master)
 
-Simple count of neighboring voxel edges that span two segments
+Simple count of edges shared by neighboring voxels between segment pairs
