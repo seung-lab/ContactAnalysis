@@ -6,4 +6,4 @@
 
 [![codecov.io](http://codecov.io/github/seung-lab/ContactAnalysis.jl/coverage.svg?branch=master)](http://codecov.io/github/seung-lab/ContactAnalysis.jl?branch=master)
 
-Simple count of edges shared by neighboring voxels between segment pairs
+Simple weighted count of edges shared by neighboring voxels between segment pairs
