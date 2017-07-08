@@ -6,7 +6,6 @@ https://github.com/seung-lab/neuroglancer/blob/cleanup_yacn/python/ext/third_par
 module Precomputed
 
 using PyCall
-using OffsetArrays
 @pyimport neuroglancer.pipeline as pl
 const pyslice=pybuiltin(:slice)
 
