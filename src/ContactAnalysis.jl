@@ -1,6 +1,7 @@
 module ContactAnalysis
 
 using SimpleTasks
+using PyCall
 
 export count_edges
 
