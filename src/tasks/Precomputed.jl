@@ -6,13 +6,7 @@ https://github.com/seung-lab/neuroglancer/blob/cleanup_yacn/python/ext/third_par
 module Precomputed
 
 using PyCall
-neuroglancer_in_path = false
-for d in PyVector(pyimport("sys")["path"])
-    neuroglancer_in_path |= contains(d, "neuroglancer")
-end
-if neuroglancer_in_path
-    @pyimport neuroglancer.pipeline as pl
-end
+@pyimport neuroglancer.pipeline as pl
 const pyslice=pybuiltin(:slice)
 
 function cached(f)
