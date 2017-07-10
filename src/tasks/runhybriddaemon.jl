@@ -9,7 +9,7 @@ using SimpleTasks.Services.GCSCLIProvider
 using SimpleTasks.Services.FileSystemCache
 using SimpleTasks.Services.BucketCacheDatasource
 using SimpleTasks.Services.Daemon
-using CountEdgesTask
+using ContactAnalysis.CountEdgesTask
 
 import AWS
 
