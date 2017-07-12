@@ -13,6 +13,10 @@ using ContactAnalysis.CountEdgesTask
 
 import AWS
 
+type NullBucketService <: BucketService
+    name::AbstractString
+end
+
 type RunConfig
     task_queue_name::ASCIIString
     error_queue_name::ASCIIString
@@ -41,7 +45,8 @@ function run(task_queue_name, error_queue_name, done_queue_name,
     done_queue = AWSQueueService(env, done_queue_name)
 
     # Create a datasource to read and write data from
-    bucket = CLIBucketService(GCSCLIProvider.Details(), bucket_name)
+    # bucket = CLIBucketService(GCSCLIProvider.Details(), bucket_name)
+    bucket = NullBucketService(bucket_name)
     cache = FileSystemCacheService(cache_directory)
     datasource = BucketCacheDatasourceService(bucket, cache)
 
@@ -50,7 +55,7 @@ function run(task_queue_name, error_queue_name, done_queue_name,
         bucket, datasource, poll_frequency_seconds)
 
     # Register the NOOP task
-    register!(daemon, CountEdgesTask.NAME, CountEdgesTaskDetails)
+    register!(daemon, CountEdgesTask.NAME, CountEdgesTask.CountEdgesTaskDetails)
 
     Daemon.run(daemon)
 end
