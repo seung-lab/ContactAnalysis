@@ -1,0 +1,28 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: analysis-deployment
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: analysis
+    spec:
+      containers:
+        - name: neuroglancer
+          image: macrintr/neuroglancer
+          imagePullPolicy: Always
+          command: ["/bin/sh"]
+          args: ["-c", "julia /neuroglancer/python/ext/third_party/contact_analysis/src/tasks/runhybriddaemon.jl task-queue-pinky error-queue-pinky done-queue-pinky neuroglancer/pinky40_v11/analysis/ neuroglancer/pinky40_v11/analysis/ 10"]
+          volumeMounts:
+          - name: secrets
+            mountPath: "/secrets"
+            readOnly: true
+          resources:
+            requests:
+              memory: 6Gi
+      volumes:
+      - name: secrets
+        secret:
+          secretName: secrets
