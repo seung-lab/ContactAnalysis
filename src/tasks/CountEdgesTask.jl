@@ -99,37 +99,6 @@ function DaemonTask.execute(task::CountEdgesTaskDetails,
     return DaemonTask.Result(true, [str_slices])
 end
 
-function map_chunks(sz, o, chunk, overlap)
-    """
-    Create ranges for 3D chunks
-
-    Args:
-        sz: dataset size (collection of 3 ints)
-        o: origin voxel (collection of 3 ints)
-        chunk: size of the chunk (collection of 3 ints)
-        overlap: number of voxels in positive overlap (collection of 3 ints)
-
-    Returns:
-        list of ranges describing chunks in larger volume
-    """
-    # pre = PrecomputedWrapper(segmentation_storage, scale_idx)
-    # sz = pre.val[:_scale]["size"]
-    # o = pre.val[:_scale]["voxel_offset"]
-    ranges = []
-    for x_start in o[1]:max(chunk[1],1):o[1]+sz[1]-1
-        x_end = min(x_start+chunk[1]+overlap[1]-1, o[1]+sz[1]-1)
-        for y_start in o[2]:max(chunk[2],1):o[2]+sz[2]-1
-            y_end = min(y_start+chunk[2]+overlap[2]-1, o[2]+sz[2]-1)
-            for z_start in o[3]:max(chunk[3],1):o[3]+sz[3]-1
-                z_end = min(z_start+chunk[3]+overlap[3]-1, o[3]+sz[3]-1)
-                r = x_start:x_end, y_start:y_end, z_start:z_end
-                push!(ranges, r)
-            end
-        end
-    end
-    return ranges
-end
-
 function DaemonTask.finalize(task::CountEdgesTaskDetails, 
                 datasource::DatasourceService, result::DaemonTask.Result)
     return true
