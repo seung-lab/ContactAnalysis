@@ -217,6 +217,6 @@ function compile_edge_lists(name="touches")
         next_edge_list = readdlm(joinpath(dir, fn))
         edge_list = vcat(edge_list, next_edge_list)
     end
-    edge_fn = joinpath(homedir(), string(name, '.csv'))
-    writedlm(edge_fn, edge_list)
+    edge_fn = joinpath(homedir(), string(name, ".csv"))
+    writedlm(edge_fn, edge_list, delimeter=',')
 end
