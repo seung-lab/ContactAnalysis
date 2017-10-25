@@ -1,12 +1,25 @@
 using JSON
 
+function get_precomputed()
+    inlayer = "gs://neuroglancer/pinky40_v11/watershed_mst_trimmed_sem_remap"
+    outlayer = "gs://neuroglancer/pinky40_v11/analysis/contact_dicts/"
+    p = ContactAnalysis.Precomputed.PrecomputedWrapper(inlayer, 1)
+    return inlayer, outlayer, p
+end
+
 function schedule_tasks(ranges, inlayer, outlayer)
-	for r in ranges
-		payload_info = ContactAnalysis.CountEdgesTask.CountEdgesPayloadInfo(inlayer, 
+    for r in ranges
+        payload_info = ContactAnalysis.CountEdgesTask.CountEdgesPayloadInfo(inlayer, 
                 ContactAnalysis.CountEdgesTask.slices_to_str([r...]), 1, outlayer)
-		basic_info = SimpleTasks.Tasks.BasicTask.Info(0, "CountEdgesTask", inlayer, [""])
-		ContactAnalysis.AWSScheduler.schedule_count_edges(basic_info, payload_info, queue_name="task-queue-pinky")
-	end
+        basic_info = SimpleTasks.Tasks.BasicTask.Info(0, "CountEdgesTask", inlayer, [""])
+        ContactAnalysis.AWSScheduler.schedule_count_edges(basic_info, payload_info, queue_name="task-queue-pinky")
+    end
+end
+
+function schedule_pinky40()
+    inlayer, outlayer, p = get_precomputed()
+    ranges = make_ranges(p)
+    schedule_tasks(ranges, inlayer, outlayer)
 end
 
 function map_chunks(sz, o, chunk, overlap)
@@ -48,18 +61,6 @@ function make_ranges(p, chunk_size=[256,256,64], overlap=[1,1,1])
                                                         chunk_size, overlap)
 end
 
-function schedule_pinky40()
-    inlayer = "gs://neuroglancer/pinky40_v11/watershed_mst_trimmed_sem_remap"
-    outlayer = "gs://neuroglancer/pinky40_v11/analysis/contact_dicts/"
-    p = ContactAnalysis.Precomputed.PrecomputedWrapper(inlayer, 1)
-    ranges = make_ranges(p)
-    schedule_tasks(ranges, inlayer, outlayer)
-end
-
-function map_to_uint32_tuple_keys!(d)
-    return map(x->map(Int, map(parse, split(x[2:end-1], r","))), d)
-end
-
 """
 Pull all contact analysis files from gcloud
 """
@@ -87,7 +88,7 @@ end
 function str_to_slice_start_stop(s)
     m=match(r"(\d+)-(\d+)_(\d+)-(\d+)_(\d+)-(\d+)",s)
     bounds = map(x->parse(Int,x), m.captures)
-    return bounds[1], bounds[3], bounds[5], bounds[2], bounds[4], bounds[6]
+    return [bounds[1], bounds[3], bounds[5], bounds[2], bounds[4], bounds[6]]
 end
 
 function str_to_slices(s)
@@ -109,17 +110,29 @@ function get_folder(name)
     return joinpath(homedir(), "data", name)
 end
 
-function get_center()
-    s = str_to_slice_start_stop(fn[1:end-17])
-    ctr = [(s[1]+s[2])/2, (s[3]+s[4])/2, (s[5]+s[6])/2]
+"""
+Compute center on output of str_to_slice_start_stop
+"""
+ function get_center(s)
+    ctr = round(Int, [(s[1]+s[4])/2, (s[2]+s[5])/2, (s[3]+s[6])/2])
+end
+
+"""
+Horizontally concatenate center and bbox info to an edge list
+"""
+ function append_locations(fn, edge_list)
+    s = str_to_slice_start_stop(fn)
+    ctr = repmat(get_center(s), 1, size(edge_list,1))'
+    bbox = repmat(s, 1, size(edge_list,1))'
+    return hcat(edge_list[:,1:2], ctr, edge_list[:,3], bbox)
 end
 
 """
 Create contact edge list
 """
-function create_contact_edge_list(fn)
+ function create_contact_edge_list(fn)
     d = JSON.parsefile(fn, dicttype=Dict{AbstractString,Float64}, use_mmap=true)
-    contacts = zeros(length(d), 3)
+    contacts = Array{Any,2}(length(d), 3)
     segs = Set{Int64}()
     for (i, (k, v)) in enumerate(d)
         ki = (map(Int, map(parse, split(k[2:end-1], r",")))...)
@@ -131,26 +144,36 @@ function create_contact_edge_list(fn)
 end
 
 """
+Convert contact dicts into contact edge list and list of segments for proximity
+"""
+function resave_contact_dict(inputs)
+    i, n, dir, fn = inputs
+    print("\r$i / $n")
+    contacts, segs = create_contact_edge_list(joinpath(dir, fn))
+    contacts = append_locations(fn, contacts)
+    contacts_dst_fn = joinpath(get_folder("touches"), fn[1:end-17])
+    segs_dst_fn = joinpath(get_folder("segs"), fn[1:end-17])
+    writedlm(contacts_dst_fn, contacts, ',')
+    writedlm(segs_dst_fn, segs, ',')
+end
+
+"""
 Write out contact lists & sets of segments
 """
 function dir_to_contact_lists()
     dir = get_folder("contact_dicts")
     files = readdir(dir)
-    for (i, fn) in enumerate(files)
-        print("\r$i / $(length(files))")
-        contacts, segs = create_contact_edge_list(joinpath(dir, fn))
-        contacts_dst_fn = joinpath(get_folder("touches"), fn[1:end-17])
-        segs_dst_fn = joinpath(get_folder("segs"), fn[1:end-17])
-        writedlm(contacts_dst_fn, contacts)
-        writedlm(segs_dst_fn, segs)
-    end
+    inputs = [(i, length(files), dir, fn) for (i,fn) in enumerate(files)]
+    pmap(resave_contact_dict, inputs)
 end
 
 """
 From chunk with chunk_range, find range of neighbor in relative direction
 """
 function get_neighbor(chunk_range, chunk_size, direction=[1,0,0])
-    return chunk_range + chunk_size.*direction
+    return (chunk_range[1] + chunk_size[1]*direction[1],
+            chunk_range[2] + chunk_size[2]*direction[2],
+            chunk_range[3] + chunk_size[3]*direction[3])
 end
 
 function get_start(chunk_range)
@@ -162,47 +185,91 @@ function get_end(chunk_range)
 end
 
 """
-Compile list of all segment pairs in nearest-neighbor chunks
+Given two grided coords, order them
 """
-function compile_proximities(chunk_size=[256,256,64])
-    inlayer = "gs://neuroglancer/pinky40_v11/watershed_mst_trimmed_sem_remap"
-    p = ContactAnalysis.Precomputed.PrecomputedWrapper(inlayer, 1)
-    ranges = make_ranges(p)
-    directions = ([1,0,0], 
-                  [1,1,0], 
-                  [1,1,1], 
-                  [1,0,1], 
-                  [0,1,0], 
-                  [0,1,1], 
-                  [0,0,1])
-    for (i, chunk_range) in enumerate(ranges)
-        print("\r$i / $(length(ranges))")
-        segs_fn = joinpath(get_folder("segs"), slices_to_str(chunk_range))
-        if isfile(segs_fn)
-            segs = readdlm(segs_fn)
-            for d in directions
-                neigh_range = get_neighbor(chunk_range, chunk_size, d)
-                neigh_fn = joinpath(get_folder("segs"), slices_to_str(neigh_range))
-                if isfile(neigh_fn)
-                    push!(segs, readdlm(neigh_fn))
+function order_coords(coord1, coord2)
+    return reduce(|, coord1 .<= coord2) ? (coord1, coord2) : (coord2, coord1);
+end
+
+function write_proximities(inputs)
+    i, n, directions, chunk, chunk_r = inputs
+    print("\r$i / $n")
+    segs_fn = joinpath(get_folder("segs"), slices_to_str(chunk_r))
+    if isfile(segs_fn)
+        chunk_start = get_start(chunk_r)
+        chunk_stop = get_end(chunk_r)
+        for d in directions
+            neigh_r = get_neighbor(chunk_r, chunk, d)
+            neigh_fn = joinpath(get_folder("segs"), slices_to_str(neigh_r))
+            if isfile(neigh_fn)
+                neigh_start = get_start(neigh_r)
+                neigh_stop = get_end(neigh_r)
+                cube_start, _ = order_coords(chunk_start, neigh_start)
+                _, cube_stop = order_coords(chunk_stop, neigh_stop)
+                ctr = get_center([cube_start..., cube_stop...])
+                try
+                    segs = readdlm(segs_fn, Int64)
+                    combined_segs = vcat(segs, readdlm(neigh_fn, Int64))
+                    unique_segs = sort(unique(segs))
+                    if unique_segs[1] == 0
+                        unique_segs = unique_segs[2:end]
+                    end
+                    n = length(unique_segs)
+                    k = 1
+                    proximity = Array{Any,2}(Int((n^2-n)/2), 9)
+                    for (i, seg1) in enumerate(unique_segs[1:end-1])
+                        for seg2 in unique_segs[i+1:end]
+                            proximity[k,:] = [seg1, seg2,
+                                        round(sum(chunk.*[8,8,40]/1000.*d),2),
+                                        cube_start..., cube_stop...]
+                            k += 1
+                        end
+                    end
+                    cube_range = (cube_start[1]:cube_stop[1], 
+                                    cube_start[2]:cube_stop[2], 
+                                    cube_start[3]:cube_stop[3])
+                    r_name = slices_to_str(cube_range)
+                    proximity_fn = joinpath(get_folder("proximity"), r_name)
+                    # proximity = append_locations(proximity_fn, proximity)
+                    writedlm(proximity_fn, proximity, ',')
+                catch e
+                    println((e, chunk_start, neigh_start))
                 end
             end
-            proximity = []
-            unique_segs = sort(unique(segs))
-            r_start = get_start(chunk_range)
-            far_range = get_neighbor(chunk_range, chunk_size, [1,1,1])
-            r_stop = get_stop(far_range)
-            for (i, seg1) in enumerate(unique_segs[1:end-1])
-                for seg2 in unique_segs[i+1:end]
-                    row = [seg1, seg2, 0]
-                    push!(proximity, row)
-                end
-            end
-            r_name = slices_to_str(map(range, zip(r_start, r_stop)...))
-            proximity_fn = joinpath(get_folder("proximity"), r_name)
-            writedlm(proximity_fn, proximity)
         end
     end
+end
+
+"""
+Compile list of all segment pairs in nearest-neighbor chunks
+"""
+function compute_all_proximities(sz, origin, chunk=[256,256,64], overlap=[1,1,1])
+    ranges = map_chunks(sz, origin, chunk, overlap)
+    # directions = ([0,0,0])
+    directions = ([ 1, 1, 1],
+                  [ 1, 0, 1],
+                  [ 0,-1, 1],
+                  [ 0, 1, 1],
+                  [ 0, 0, 1],
+                  [ 0,-1, 1],
+                  [-1, 1, 1],
+                  [-1, 0, 1],
+                  [-1,-1, 1],
+                  [ 1, 1, 0],
+                  [ 1, 0, 0],
+                  [ 0, 1, 0],
+                  [ 0, 0, 0])
+    inputs = [(i, length(ranges), directions, chunk, chunk_r) 
+                            for (i,chunk_r) in enumerate(ranges)]
+    pmap(write_proximities, inputs)                                
+end
+
+"""
+Add index in first column of the edge list
+"""
+function index_edges(edge_list)
+    id = 1:size(edge_list,1)
+    return hcat(id, edge_list)
 end
 
 """
@@ -211,12 +278,15 @@ Combine directory of edge lists into one large edge list
 function compile_edge_lists(name="touches")
     dir = get_folder(name)
     files = readdir(dir)
-    edge_list = readdlm(joinpath(dir, files[1]))
+    edge_list = append_locations(files[1], readdlm(joinpath(dir,files[1]), Any))
     for (i, fn) in enumerate(files[2:end])
         print("\r$i / $(length(files))")
-        next_edge_list = readdlm(joinpath(dir, fn))
-        edge_list = vcat(edge_list, next_edge_list)
+        try
+            next_edge_list = append_locations(fn, readdlm(joinpath(dir,fn), Any))
+            edge_list = vcat(edge_list, next_edge_list)
+        end
     end
-    edge_fn = joinpath(homedir(), string(name, ".csv"))
-    writedlm(edge_fn, edge_list, delimeter=',')
+    edge_fn = joinpath(homedir(), "data", string(name, ".csv"))
+    writedlm(edge_fn, index_edges(edge_list), ',')
 end
+
